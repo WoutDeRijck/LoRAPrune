@@ -1,6 +1,7 @@
 from transformers.trainer import Trainer, TrainerState, TRAINER_STATE_NAME
 from torch.utils.data.distributed import DistributedSampler
-from torch.utils.data import DataLoader, RandomSampler, IterableDatasetShard
+from torch.utils.data import DataLoader, RandomSampler
+from accelerate.data_loader import IterableDatasetShard
 import loraprune.utils as utils
 from transformers.trainer_utils import has_length
 import math
@@ -8,14 +9,14 @@ from transformers.debug_utils import DebugUnderflowOverflow, DebugOption
 import os
 import torch
 from transformers.trainer import *
-from transformers.deepspeed import deepspeed_init
-from transformers.trainer_pt_utils import ShardedDDPOption, is_sagemaker_mp_enabled, get_model_param_count
+from transformers.integrations.deepspeed import deepspeed_init
+from transformers.trainer_pt_utils import is_sagemaker_mp_enabled, get_model_param_count
 import sys
 import time
 import logging
 import shutil
 from torch import nn
-from transformers.file_utils import is_torch_tpu_available
+from transformers.utils import is_torch_tpu_available
 from transformers.trainer_utils import speed_metrics, TrainOutput
 from packaging import version
 from torch.cuda import amp
@@ -51,7 +52,6 @@ class LoRAPruneTrainer(Trainer):
         self.cooldown_iters = cooldown_iters
         self.prune_freq = prune_freq
         self.prune_metric = prune_metric
-        self.sharded_ddp = None
         self.fsdp = None
 
     def _inner_training_loop(
@@ -109,12 +109,7 @@ class LoRAPruneTrainer(Trainer):
             else:
                 debug_overflow = DebugUnderflowOverflow(self.model)  # noqa
 
-        delay_optimizer_creation = (
-            self.sharded_ddp is not None
-            and self.sharded_ddp != ShardedDDPOption.SIMPLE
-            or is_sagemaker_mp_enabled()
-            or self.fsdp is not None
-        )
+        delay_optimizer_creation = is_sagemaker_mp_enabled() or self.fsdp is not None
         if args.deepspeed:
             deepspeed_engine, optimizer, lr_scheduler = deepspeed_init(
                 self, num_training_steps=max_steps, resume_from_checkpoint=resume_from_checkpoint
