@@ -350,11 +350,16 @@ class Linear(nn.Linear, LoraLayer):
         elif self.r > 0 and not self.merged:
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
             if self.r > 0:
-                result += self.lora_B(self.lora_A(self.lora_dropout(x))) * self.scaling
+                # Ensure the same dtype for all operations
+                lora_output = self.lora_B(self.lora_A(self.lora_dropout(x))) * self.scaling
+                result = result.to(lora_output.dtype)  # Cast result to the dtype of lora_output
+                result += lora_output
         else:
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
+        
         if hasattr(self, 'lora_mask'):
             result *= self.lora_mask.reshape(1, 1, -1)
+        
         return result
 
 
