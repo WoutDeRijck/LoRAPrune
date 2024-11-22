@@ -283,7 +283,10 @@ class LoRAPruneTrainer(Trainer):
                     and args._no_sync_in_gradient_accumulation
                 ):
                     # Avoid unnecessary DDP synchronization since there will be no backward pass on this example.
-                    with model.no_sync():
+                    if hasattr(model, "no_sync"):
+                        with model.no_sync():
+                            tr_loss_step = self.training_step(model, inputs)
+                    else:
                         tr_loss_step = self.training_step(model, inputs)
                 else:
                     tr_loss_step = self.training_step(model, inputs)
