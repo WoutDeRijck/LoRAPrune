@@ -205,18 +205,17 @@ def train(
     # utils.print_trainable_parameters(model)
 
     if val_set_size > 0:
-        # Create a train-test split if it doesn't exist
-        if "train" not in data or "test" not in data:
-            data = data.train_test_split(test_size=val_set_size, shuffle=True, seed=42)
-        
+        train_val = data["train"].train_test_split(
+            test_size=val_set_size, shuffle=True, seed=42
+        )
         train_data = (
-            data["train"].shuffle().map(generate_and_tokenize_prompt)
+            train_val["train"].shuffle().map(generate_and_tokenize_prompt)
         )
         val_data = (
-            data["test"].shuffle().map(generate_and_tokenize_prompt)
+            train_val["test"].shuffle().map(generate_and_tokenize_prompt)
         )
     else:
-        train_data = data.shuffle().map(generate_and_tokenize_prompt)
+        train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
         val_data = None
 
     trainer = LoRAPruneTrainer(

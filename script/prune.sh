@@ -7,7 +7,7 @@ CUDA_VISIBLE_DEVICES=0 python /content/LoRAPrune/prune.py \
     --num_epochs 2 \
     --learning_rate 1e-4 \
     --cutoff_len 512 \
-    --val_set_size 1000 \
+    --val_set_size 20 \
     --lora_r 8 \
     --lora_alpha 16 \
     --lora_dropout 0.05 \

@@ -1,5 +1,31 @@
-from transformers.trainer import *
+from transformers.trainer import Trainer, TrainerState, TRAINER_STATE_NAME
+from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader, RandomSampler, IterableDatasetShard
 import loraprune.utils as utils
+from transformers.trainer_utils import has_length
+import math
+from transformers.debug_utils import DebugUnderflowOverflow, DebugOption
+import os
+import torch
+from transformers.trainer import *
+from transformers.deepspeed import deepspeed_init
+from transformers.trainer_pt_utils import ShardedDDPOption, is_sagemaker_mp_enabled, get_model_param_count
+import sys
+import time
+import logging
+import shutil
+from torch import nn
+from transformers.file_utils import is_torch_tpu_available
+from transformers.trainer_utils import speed_metrics, TrainOutput
+from packaging import version
+from torch.cuda import amp
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+
+# Define the utility function
+is_torch_less_than_1_11 = version.parse(torch.__version__) < version.parse("1.11.0")
+
 class LoRAPruneTrainer(Trainer):
     def __init__(self, model,
                  train_dataset,
@@ -25,6 +51,8 @@ class LoRAPruneTrainer(Trainer):
         self.cooldown_iters = cooldown_iters
         self.prune_freq = prune_freq
         self.prune_metric = prune_metric
+        self.sharded_ddp = None
+        self.fsdp = None
 
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None

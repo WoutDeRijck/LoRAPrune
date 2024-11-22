@@ -26,6 +26,7 @@ import torch.nn.functional as F
 from transformers.pytorch_utils import Conv1D
 
 from peft.utils import PeftConfig, PeftType, transpose
+from peft.tuners.lora import MergedLinear8bitLt
 
 
 def is_bnb_available():
