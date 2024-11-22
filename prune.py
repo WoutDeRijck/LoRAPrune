@@ -5,7 +5,7 @@ from typing import List
 import fire
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from loraprune.trainer import LoRAPruneTrainer
 from loraprune.utils import freeze
 
@@ -15,6 +15,7 @@ from peft import (
 )
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft.peft_model import get_peft_model_state_dict, set_peft_model_state_dict
+from dataset_types import MedicalReport
 
 IGNORE_INDEX = -100
 
@@ -145,10 +146,10 @@ def train(
         return result
 
     def generate_and_tokenize_prompt(data_point):
-        full_prompt = generate_prompt(data_point)
+        full_prompt = generate_prompt()
         tokenized_full_prompt = tokenize(full_prompt)
         if not train_on_inputs:
-            user_prompt = generate_prompt({**data_point, "response": ""})
+            user_prompt = generate_prompt()
             tokenized_user_prompt = tokenize(user_prompt, add_eos_token=False)
             user_prompt_len = len(tokenized_user_prompt["input_ids"])
 
@@ -176,10 +177,7 @@ def train(
     # from peft import get_peft_model
     model = get_peft_model(model, config)
 
-    if data_path.endswith(".json"):  # todo: support jsonl
-        data = load_dataset("json", data_files=data_path)
-    else:
-        data = load_dataset(data_path)
+    data = load_from_disk(data_path)
 
     freeze(model)
     model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
@@ -207,17 +205,18 @@ def train(
     # utils.print_trainable_parameters(model)
 
     if val_set_size > 0:
-        train_val = data["train"].train_test_split(
-            test_size=val_set_size, shuffle=True, seed=42
-        )
+        # Create a train-test split if it doesn't exist
+        if "train" not in data or "test" not in data:
+            data = data.train_test_split(test_size=val_set_size, shuffle=True, seed=42)
+        
         train_data = (
-            train_val["train"].shuffle().map(generate_and_tokenize_prompt)
+            data["train"].shuffle().map(generate_and_tokenize_prompt)
         )
         val_data = (
-            train_val["test"].shuffle().map(generate_and_tokenize_prompt)
+            data["test"].shuffle().map(generate_and_tokenize_prompt)
         )
     else:
-        train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
+        train_data = data.shuffle().map(generate_and_tokenize_prompt)
         val_data = None
 
     trainer = LoRAPruneTrainer(
@@ -279,14 +278,13 @@ def train(
     )
 
 
-def generate_prompt(data_point):
-    return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.
-
-### Instruction:
-{data_point["instruction"]}
-
-### Response:
-{data_point["response"]}"""
+def generate_prompt():
+    return f"""
+Extract the medical report information into the following model:
+{MedicalReport.schema()}
+If something is not clear, or incomplete, leave it blank.
+INPUT:
+"""
 
 
 if __name__ == "__main__":
