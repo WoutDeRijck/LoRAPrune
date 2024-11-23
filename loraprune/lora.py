@@ -340,6 +340,8 @@ class Linear(nn.Linear, LoraLayer):
         self.lora_B.eval()
 
     def forward(self, x: torch.Tensor):
+        input_dtype = x.dtype  # Get input dtype to maintain consistency
+        
         if self.disable_adapters:
             if self.r > 0 and self.merged:
                 self.weight.data -= (
@@ -350,15 +352,22 @@ class Linear(nn.Linear, LoraLayer):
         elif self.r > 0 and not self.merged:
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
             if self.r > 0:
-                # Ensure the same dtype for all operations
-                lora_output = self.lora_B(self.lora_A(self.lora_dropout(x))) * self.scaling
-                result = result.to(lora_output.dtype)  # Cast result to the dtype of lora_output
-                result += lora_output
+                # Cast LoRA weights to input dtype
+                lora_A_weight = self.lora_A.weight.to(input_dtype)
+                lora_B_weight = self.lora_B.weight.to(input_dtype)
+                
+                # Compute LoRA path
+                dropout_x = self.lora_dropout(x)  # Already in input_dtype
+                a_output = F.linear(dropout_x, lora_A_weight)  # Use F.linear directly
+                b_output = F.linear(a_output, lora_B_weight)   # Use F.linear directly
+                
+                lora_output = b_output * self.scaling
+                result = result + lora_output  # Both tensors now in same dtype
         else:
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
         
         if hasattr(self, 'lora_mask'):
-            result *= self.lora_mask.reshape(1, 1, -1)
+            result *= self.lora_mask.to(input_dtype).reshape(1, 1, -1)
         
         return result
 
