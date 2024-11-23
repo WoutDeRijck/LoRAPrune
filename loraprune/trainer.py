@@ -53,6 +53,7 @@ class LoRAPruneTrainer(Trainer):
         self.prune_freq = prune_freq
         self.prune_metric = prune_metric
         self.fsdp = None
+        self.do_grad_scaling = None
 
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None

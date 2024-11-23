@@ -47,12 +47,22 @@ def update_sensitivity_dict(model, s_dict, pruning_type):
             fan_in = name.split('.')[-1] in pruning_groups['block']
             s = compute_sensitivity(module, is_attn, pruning_type, fan_in)
             name = ".".join(name.split('.')[:-1])
+            if s_all[name].size(0) != s.size(0):
+                if s_all[name].size(0) > s.size(0):
+                    s = torch.nn.functional.pad(s, (0, s_all[name].size(0) - s.size(0)))
+                else:
+                    s = s[:s_all[name].size(0)]
             s_all[name] += s
-            #s_dict[i] += s
+
     for name, imp in s_all.items():
         if torch.isnan(imp.sum()):
             return s_dict
     for name, imp in s_dict.items():
+        if s_dict[name].size(0) != s_all[name].size(0):
+            if s_dict[name].size(0) > s_all[name].size(0):
+                s_all[name] = torch.nn.functional.pad(s_all[name], (0, s_dict[name].size(0) - s_all[name].size(0)))
+            else:
+                s_all[name] = s_all[name][:s_dict[name].size(0)]
         s_dict[name] = imp * 0.9 + s_all[name] * 0.1
     return s_dict
 
