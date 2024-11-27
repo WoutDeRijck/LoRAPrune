@@ -5,9 +5,10 @@ from typing import List
 import fire
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import load_from_disk
 from loraprune.trainer import LoRAPruneTrainer
 from loraprune.utils import freeze
+from dataset_types import MedicalReport
 
 from peft import (
     LoraConfig,
@@ -177,9 +178,9 @@ def train(
     model = get_peft_model(model, config)
 
     if data_path.endswith(".json"):  # todo: support jsonl
-        data = load_dataset("json", data_files=data_path)
+        data = load_from_disk("json", data_files=data_path)
     else:
-        data = load_dataset(data_path)
+        data = load_from_disk(data_path)
 
     freeze(model)
     model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
@@ -280,13 +281,21 @@ def train(
 
 
 def generate_prompt(data_point):
-    return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.
+    return """
+Extract the medical report information into the following model:
+{schema}
+If something is not clear, or incomplete, leave it blank.
 
-### Instruction:
-{data_point["instruction"]}
+### INPUT:
+{instruction}
 
-### Response:
-{data_point["response"]}"""
+### RESPONSE:
+{response}
+""".format(
+        schema=MedicalReport.schema(),
+        instruction=data_point["instruction"],
+        response=data_point["response"]
+    )
 
 
 if __name__ == "__main__":

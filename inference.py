@@ -1,3 +1,4 @@
+import json
 import sys
 import os
 import fire
@@ -10,9 +11,13 @@ from peft.peft_model import set_peft_model_state_dict
 from loraprune.peft_model import get_peft_model
 from loraprune.utils import freeze, prune_from_checkpoint
 from peft import LoraConfig
-from datasets import load_dataset
+from datasets import load_from_disk
+from dataset_types import MedicalReport
 
 from transformers import LlamaForCausalLM, LlamaTokenizer
+from lmformatenforcer import JsonSchemaParser
+from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
+from transformers import pipeline
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -28,6 +33,7 @@ except:  # noqa: E722
 
 def main(
     base_model: str = "",
+    dataset: str = "",
     lora_r: int = 8,
     lora_alpha: int = 16,
     lora_dropout: float = 0.,
@@ -43,6 +49,9 @@ def main(
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='decapoda-research/llama-7b-hf'"
+    assert (
+        dataset
+    ), "Please specify a --dataset, e.g. --dataset='wikitext'"
 
     tokenizer = LlamaTokenizer.from_pretrained(base_model)
     model = LlamaForCausalLM.from_pretrained(
@@ -59,6 +68,8 @@ def main(
         bias="none",
         task_type="CAUSAL_LM",
     )
+
+    hf_pipeline = pipeline('text-generation', model=model, tokenizer=tokenizer, device_map='auto')
 
     model = get_peft_model(model, config)
     if lora_weights:
@@ -150,20 +161,46 @@ def main(
         # print(torch.cat(nlls, dim=-1).mean())
         ppl = np.exp(torch.cat(nlls, dim=-1).mean().item())
         return ppl.item()
+    
+    #########################################################
+    # Run on dataset
+    #########################################################
 
-    eval_data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
-    test_dataset = process_data(eval_data, tokenizer, cutoff_len, 'text')
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
-    results = PPLMetric(model, loader=test_loader)
-    times = np.mean(times)
-    print("wikitext2 ppl:{:.2f}  inference time:{:2f}".format(results, times))
-    times = []
-    eval_data = load_dataset('ptb_text_only', 'penn_treebank', split='validation')
-    test_dataset = process_data(eval_data, tokenizer, cutoff_len, 'sentence')
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
-    results = PPLMetric(model, loader=test_loader)
-    times = np.mean(times)
-    print("PTB ppl:{:.2f}  inference time:{:2f}".format(results, times))
+    data = load_from_disk(dataset)
+
+    hf_pipeline.model = model
+
+    results = []
+    for i, sample in enumerate(data):
+        prompt = """
+Extract the medical report information into the following model:
+{schema}
+If something is not clear, or incomplete, leave it blank.
+
+### INPUT:
+{instruction}
+
+### RESPONSE:
+""".format(
+            schema=MedicalReport.schema(),
+            instruction=sample["instruction"]
+        )
+
+        # Create a character level parser and build a transformers prefix function from it
+        parser = JsonSchemaParser(MedicalReport.schema())
+        prefix_function = build_transformers_prefix_allowed_tokens_fn(hf_pipeline.tokenizer, parser)
+
+        # Call the pipeline with the prefix function
+        output_dict = hf_pipeline(prompt, prefix_allowed_tokens_fn=prefix_function, max_length=4096)
+
+        # Extract the results
+        result = output_dict[0]['generated_text'][len(prompt):]
+        # Save result to file instead of printing
+        results.append({str(i): result})
+    
+    with open('medical_report_output.json', 'w') as f:
+        json.dump(results, f)
+
     return
 
 
