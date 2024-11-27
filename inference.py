@@ -18,6 +18,7 @@ from transformers import LlamaForCausalLM, LlamaTokenizer
 from lmformatenforcer import JsonSchemaParser
 from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
 from transformers import pipeline
+from tqdm import tqdm
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -167,11 +168,13 @@ def main(
     #########################################################
 
     data = load_from_disk(dataset)
+    data = data['eval']
 
     hf_pipeline.model = model
 
     results = []
-    for i, sample in enumerate(data):
+    # Process data in batches
+    for i, sample in tqdm(enumerate(data), desc="Processing Batches"):
         prompt = """
 Extract the medical report information into the following model:
 {schema}
@@ -182,22 +185,24 @@ If something is not clear, or incomplete, leave it blank.
 
 ### RESPONSE:
 """.format(
-            schema=MedicalReport.schema(),
-            instruction=sample["instruction"]
-        )
+                schema=MedicalReport.schema(),
+                instruction=sample["instruction"]
+            )
 
-        # Create a character level parser and build a transformers prefix function from it
+        # Create a character level parser and build a transformers prefix function
         parser = JsonSchemaParser(MedicalReport.schema())
         prefix_function = build_transformers_prefix_allowed_tokens_fn(hf_pipeline.tokenizer, parser)
 
-        # Call the pipeline with the prefix function
-        output_dict = hf_pipeline(prompt, prefix_allowed_tokens_fn=prefix_function, max_length=4096)
+        # Process batch
+        outputs = hf_pipeline(prompt, prefix_allowed_tokens_fn=prefix_function, max_length=4096)
 
-        # Extract the results
-        result = output_dict[0]['generated_text'][len(prompt):]
-        # Save result to file instead of printing
-        results.append({str(i): result})
-    
+        # Extract results
+        result = outputs[0]['generated_text'][len(prompt):]
+        medical_report = MedicalReport.model_validate_json(result)
+        if not medical_report.is_valid():
+            print(f"Invalid medical report: {medical_report}")
+        results.append({str(i): medical_report.model_dump_json()})
+
     with open('medical_report_output.json', 'w') as f:
         json.dump(results, f)
 
