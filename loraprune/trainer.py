@@ -4,7 +4,6 @@ from transformers.trainer import (
     TrainOutput,
     has_length,
     logger,
-    ShardedDDPOption,
     is_sagemaker_mp_enabled,
     get_model_param_count,
     speed_metrics,
@@ -80,13 +79,8 @@ class LoRAPruneTrainer(Trainer):
                 f" {args.max_steps}"
             )
 
-        # Initialize model, optimizer and scheduler
-        delay_optimizer_creation = (
-            self.sharded_ddp is not None
-            and self.sharded_ddp != ShardedDDPOption.SIMPLE
-            or is_sagemaker_mp_enabled()
-            or self.fsdp is not None
-        )
+        # Initialize model, optimizer, and scheduler
+        delay_optimizer_creation = is_sagemaker_mp_enabled()
 
         if args.deepspeed:
             deepspeed_engine, optimizer, lr_scheduler = deepspeed_init(
