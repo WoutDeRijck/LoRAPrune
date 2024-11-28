@@ -3,7 +3,6 @@ from transformers.trainer import (
     TrainerState,
     TrainOutput,
     has_length,
-    logger,
     is_sagemaker_mp_enabled,
     get_model_param_count,
     speed_metrics,
@@ -16,6 +15,9 @@ import time
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 from transformers.trainer_pt_utils import IterableDatasetShard
+from transformers.utils import logging
+
+logger = logging.get_logger(__name__)
 
 class LoRAPruneTrainer(Trainer):
     def __init__(self, model,
