@@ -12,7 +12,7 @@ from dataset_types import MedicalReport
 
 from peft import (
     LoraConfig,
-    prepare_model_for_int8_training,
+    prepare_model_for_kbit_training,
 )
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft.peft_model import get_peft_model_state_dict, set_peft_model_state_dict
@@ -161,7 +161,7 @@ def train(
         return tokenized_full_prompt
 
     if load_in_8bit:
-        model = prepare_model_for_int8_training(model)
+        model = prepare_model_for_kbit_training(model)
 
     # TODO: convert sparseLinear for model here
     # utils.convert_sparse_network(model, target_modules=lora_target_modules)
