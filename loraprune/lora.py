@@ -26,7 +26,7 @@ import torch.nn.functional as F
 from transformers.pytorch_utils import Conv1D
 
 from peft.utils import PeftType, transpose
-from peft import PeftConfig
+from peft import LoraConfig as PeftLoraConfig
 
 
 def is_bnb_available():
@@ -39,7 +39,7 @@ if is_bnb_available():
 
 
 @dataclass
-class LoraConfig(PeftConfig):
+class LoraConfig(PeftLoraConfig):
     """
     This is the configuration class to store the configuration of a [`~peft.Lora`].
 
