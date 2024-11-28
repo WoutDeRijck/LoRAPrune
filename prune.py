@@ -9,9 +9,10 @@ from datasets import load_from_disk
 from loraprune.trainer import LoRAPruneTrainer
 from loraprune.utils import freeze
 from dataset_types import MedicalReport
+from loraprune.lora import LoraConfig
+
 
 from peft import (
-    LoraConfig,
     prepare_model_for_kbit_training,
 )
 from transformers import AutoTokenizer, AutoModelForCausalLM
