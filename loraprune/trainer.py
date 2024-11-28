@@ -14,7 +14,8 @@ import math
 import sys
 import time
 import torch
-from torch.utils.data import DataLoader, DistributedSampler, IterableDatasetShard
+from torch.utils.data import DataLoader, DistributedSampler
+from transformers.trainer_pt_utils import IterableDatasetShard
 
 class LoRAPruneTrainer(Trainer):
     def __init__(self, model,
