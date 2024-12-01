@@ -15,6 +15,10 @@ class LoraPeftModelForCausalLM(PeftModelForCausalLM):
         super().__init__(model, peft_config)
         self.base_model = LoraModel(peft_config, model)
 
+    @property
+    def active_peft_config(self):
+        return self.peft_config
+
     @classmethod
     def from_pretrained(cls, model, model_id, **kwargs):
         r"""
