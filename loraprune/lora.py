@@ -148,6 +148,7 @@ class LoraModel(torch.nn.Module):
                     is_target_modules_in_base_model = True
                 parent, target, target_name = self._get_submodules(key)
                 bias = target.bias is not None
+                new_module = None
                 if loaded_in_8bit and isinstance(target, bnb.nn.Linear8bitLt):
                     kwargs.update(
                         {
@@ -179,7 +180,8 @@ class LoraModel(torch.nn.Module):
                             )
                             kwargs["fan_in_fan_out"] = False
                     new_module = Linear(in_features, out_features, bias=bias, **kwargs)
-                self._replace_module(parent, target_name, new_module, target)
+                if new_module is not None:
+                    self._replace_module(parent, target_name, new_module, target)
         if not is_target_modules_in_base_model:
             raise ValueError(
                 f"Target modules {self.peft_config.target_modules} not found in the base model. "
