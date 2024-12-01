@@ -164,7 +164,11 @@ class LoRAPruneTrainer(Trainer):
                     and args.local_rank != -1
                     and args._no_sync_in_gradient_accumulation
                 ):
-                    with model.no_sync():
+                    # Check if model is wrapped in DDP
+                    if hasattr(model, 'no_sync'):
+                        with model.no_sync():
+                            tr_loss_step = self.training_step(model, inputs)
+                    else:
                         tr_loss_step = self.training_step(model, inputs)
                 else:
                     tr_loss_step = self.training_step(model, inputs)
