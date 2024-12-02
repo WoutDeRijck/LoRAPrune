@@ -5,7 +5,7 @@ from typing import List
 import fire
 import torch
 import transformers
-from datasets import load_from_disk
+from datasets import load_dataset
 from loraprune.trainer import LoRAPruneTrainer
 from loraprune.utils import freeze
 from dataset_types import MedicalReport
@@ -178,10 +178,7 @@ def train(
     # from peft import get_peft_model
     model = get_peft_model(model, config)
 
-    if data_path.endswith(".json"):  # todo: support jsonl
-        data = load_from_disk("json", data_files=data_path)
-    else:
-        data = load_from_disk(data_path)
+    data = load_dataset("json", data_files=data_path)
 
     freeze(model)
     model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
