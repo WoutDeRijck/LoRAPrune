@@ -146,10 +146,10 @@ def train(
         return result
 
     def generate_and_tokenize_prompt(data_point):
-        full_prompt = generate_prompt(data_point)
+        full_prompt = data_point["prompt"] + data_point["completion"]
         tokenized_full_prompt = tokenize(full_prompt)
         if not train_on_inputs:
-            user_prompt = generate_prompt({**data_point, "response": ""})
+            user_prompt = data_point["prompt"]
             tokenized_user_prompt = tokenize(user_prompt, add_eos_token=False)
             user_prompt_len = len(tokenized_user_prompt["input_ids"])
 
@@ -276,25 +276,6 @@ def train(
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
     )
-
-
-def generate_prompt(data_point):
-    return """
-Extract the medical report information into the following model:
-{schema}
-If something is not clear, or incomplete, leave it blank.
-
-### INPUT:
-{instruction}
-
-### RESPONSE:
-{response}
-""".format(
-        schema=MedicalReport.schema(),
-        instruction=data_point["instruction"],
-        response=data_point["response"]
-    )
-
 
 if __name__ == "__main__":
     fire.Fire(train)
