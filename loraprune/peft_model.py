@@ -80,11 +80,10 @@ class LoraPeftModelForCausalLM(PeftModelForCausalLM):
                 remove_hook_from_submodules(model.prompt_encoder)
                 add_hook_to_module(model.base_model, hook)
         return model
-    
+
     @property
     def active_peft_config(self):
         return self.peft_config
-
 
 
 

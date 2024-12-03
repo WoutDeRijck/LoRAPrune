@@ -218,7 +218,6 @@ class LoraConfig(PeftConfig):
         self.target_modules = (
             set(self.target_modules) if isinstance(self.target_modules, list) else self.target_modules
         )
-        self._config_dict = {self.peft_type: self}
         # if target_modules is a regex expression, then layers_to_transform should be None
         if isinstance(self.target_modules, str) and self.layers_to_transform is not None:
             raise ValueError("`layers_to_transform` cannot be used when `target_modules` is a str.")
@@ -264,9 +263,17 @@ class LoraConfig(PeftConfig):
             self.loftq_config = vars(self.loftq_config)
 
         self._custom_modules: Optional[dict[type[nn.Mmodule], type[nn.Module]]] = None
+
+    def to_dict(self):
+        """
+        Returns the configuration for your adapter model as a dictionary. Removes runtime configurations.
+        """
+        rv = super().to_dict()
+        rv.pop("runtime_config")
+        return rv
     
     def __getitem__(self, key):
-        return self._config_dict[key]
+        return self
 
 class LoraModel(torch.nn.Module):
     """

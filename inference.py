@@ -10,11 +10,11 @@ from typing import List
 from peft.peft_model import set_peft_model_state_dict
 from loraprune.peft_model import get_peft_model
 from loraprune.utils import freeze, prune_from_checkpoint
-from peft import LoraConfig
-from datasets import load_from_disk
+from loraprune.lora import LoraConfig
+from datasets import load_dataset
 from dataset_types import MedicalReport
 
-from transformers import LlamaForCausalLM, LlamaTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from lmformatenforcer import JsonSchemaParser
 from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
 from transformers import pipeline
@@ -54,8 +54,8 @@ def main(
         dataset
     ), "Please specify a --dataset, e.g. --dataset='wikitext'"
 
-    tokenizer = LlamaTokenizer.from_pretrained(base_model)
-    model = LlamaForCausalLM.from_pretrained(
+    tokenizer = AutoTokenizer.from_pretrained(base_model, legacy=False)
+    model = AutoModelForCausalLM.from_pretrained(
         base_model,
         load_in_8bit=False,
         torch_dtype=torch.float16,
@@ -110,96 +110,29 @@ def main(
 
 
     model.eval()
-    # if torch.__version__ >= "2" and sys.platform != "win32":
-    #     model = torch.compile(model)
-    from torch.utils.data.dataset import Dataset
-    times = []
-    class IndexDataset(Dataset):
-        def __init__(self, tensors):
-            self.tensors = tensors
-
-        def __getitem__(self, index):
-            return self.tensors[index]
-
-        def __len__(self):
-            return len(self.tensors)
-
-    def process_data(samples, tokenizer, seq_len, field_name):
-        test_ids = tokenizer("\n\n".join(samples[field_name]), return_tensors='pt').input_ids[0]
-        test_ids_batch = []
-        nsamples = test_ids.numel() // seq_len
-
-        for i in range(nsamples):
-            batch = test_ids[(i * seq_len):((i + 1) * seq_len)]
-            test_ids_batch.append(batch)
-        test_ids_batch = torch.stack(test_ids_batch)
-        return IndexDataset(tensors=test_ids_batch)
-
-    def PPLMetric(model, loader, device="cuda"):
-        ppl = llama_eval(model, loader, device)
-        print(ppl)
-        return ppl
-
-    @torch.no_grad()
-    def llama_eval(model, loader, device):
-        model.eval()
-        nlls = []
-        n_samples = 0
-        for batch in loader:
-            batch = batch.to(device)
-            with torch.cuda.amp.autocast():
-                t1 = time.time()
-                output = model(batch)
-                times.append(time.time() - t1)
-            lm_logits = output.logits
-
-            shift_logits = lm_logits[:, :-1, :].contiguous()
-            shift_labels = batch[:, 1:].contiguous()
-
-            loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-            loss = loss_fct(shift_logits.reshape(-1, shift_logits.size(-1)), shift_labels.view(-1))
-            nlls.append(loss)
-        # print(torch.cat(nlls, dim=-1).mean())
-        ppl = np.exp(torch.cat(nlls, dim=-1).mean().item())
-        return ppl.item()
     
     #########################################################
     # Run on dataset
     #########################################################
 
-    data = load_from_disk(dataset)
-    data = data['eval']
+    data = load_dataset("json", data_files=dataset)["train"]
 
     hf_pipeline.model = model
 
     results = []
     # Process data in batches
-    for i, sample in tqdm(enumerate(data), desc="Processing Batches"):
-        prompt = """
-Extract the medical report information into the following model:
-{schema}
-If something is not clear, or incomplete, leave it blank.
-
-### INPUT:
-{instruction}
-
-### RESPONSE:
-""".format(
-                schema=MedicalReport.schema(),
-                instruction=sample["instruction"]
-            )
-
+    for i, sample in tqdm(enumerate(data), desc="Processing..."):
         # Create a character level parser and build a transformers prefix function
         parser = JsonSchemaParser(MedicalReport.schema())
         prefix_function = build_transformers_prefix_allowed_tokens_fn(hf_pipeline.tokenizer, parser)
 
         # Process batch
-        outputs = hf_pipeline(prompt, prefix_allowed_tokens_fn=prefix_function, max_length=4096)
+        outputs = hf_pipeline(sample["prompt"], prefix_allowed_tokens_fn=prefix_function, max_length=4096)
 
         # Extract results
-        result = outputs[0]['generated_text'][len(prompt):]
+        result = outputs[0]['generated_text'][len(sample["prompt"]):]
         medical_report = MedicalReport.model_validate_json(result)
-        if not medical_report.is_valid():
+        if not medical_report:
             print(f"Invalid medical report: {medical_report}")
         results.append({str(i): medical_report.model_dump_json()})
 

@@ -9,6 +9,7 @@ from transformers.trainer import (
     deepspeed_init,
     TRAINER_STATE_NAME,
 )
+from transformers.trainer_callback import ExportableState
 import loraprune.utils as utils
 import math
 import sys
@@ -126,7 +127,11 @@ class LoRAPruneTrainer(Trainer):
         elif not delay_optimizer_creation:
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
-        self.state = TrainerState()
+        self.state = TrainerState(
+            stateful_callbacks=[
+                cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)
+            ]
+        )
         self.state.is_hyper_param_search = trial is not None
 
         # Activate gradient checkpointing if needed
