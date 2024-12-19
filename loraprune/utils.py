@@ -2,53 +2,62 @@ import numpy as np
 import torch
 from .lora import Linear, Linear8bitLt
 
-pruning_groups = {'self_attn': ['q_proj', 'k_proj', 'v_proj', 'o_proj'],
-                  'mlp': ['up_proj', 'gate_proj'],
-                  'block': ['o_proj', 'down_proj']}
+pruning_groups = {
+    "self_attn": ["q_proj", "k_proj", "v_proj", "o_proj"],
+    "mlp": ["up_proj", "gate_proj"],
+    "block": ["o_proj", "down_proj"],
+}
 
 NUM_ATTENTION_HEADS = 32
 
+
 def _is_target_larer(module):
-    return (isinstance(module, Linear) or isinstance(module, Linear8bitLt)) and module.is_prune
+    return (
+        isinstance(module, Linear) or isinstance(module, Linear8bitLt)
+    ) and module.is_prune
+
 
 def unfreeze(model):
     for name, module in model.named_modules():
         if _is_target_larer(module):
             module.weight.requires_grad = True
 
+
 def freeze(model):
     layers = len(model.model.model.layers)
     freeze_layer = int(layers * 0.1)
     for name, module in model.named_modules():
         if _is_target_larer(module):
-            layer = int(name.split('.')[4])
-            if layer < freeze_layer or layer == layers-1:
+            layer = int(name.split(".")[4])
+            if layer < freeze_layer or layer == layers - 1:
                 module.is_prune = False
+
 
 def init_sensitivity_dict(model):
     sensitivity_record = {}
     for name, module in model.named_modules():
         if _is_target_larer(module):
-            module_name = name.split('.')[-1]
-            if module_name in pruning_groups['self_attn']:
+            module_name = name.split(".")[-1]
+            if module_name in pruning_groups["self_attn"]:
                 head_dim = module.out_features // NUM_ATTENTION_HEADS
                 groups = module.out_features // head_dim
             else:
                 groups = module.out_features
-            name = ".".join(name.split('.')[:-1])
+            name = ".".join(name.split(".")[:-1])
             if name in sensitivity_record:
                 continue
             sensitivity_record[name] = module.lora_A.weight.data.new_zeros(groups)
     return sensitivity_record
 
+
 def update_sensitivity_dict(model, s_dict, pruning_type):
     s_all = init_sensitivity_dict(model)
     for name, module in model.named_modules():
         if _is_target_larer(module):
-            is_attn = name.split('.')[-1] in pruning_groups['self_attn']
-            fan_in = name.split('.')[-1] in pruning_groups['block']
+            is_attn = name.split(".")[-1] in pruning_groups["self_attn"]
+            fan_in = name.split(".")[-1] in pruning_groups["block"]
             s = compute_sensitivity(module, is_attn, pruning_type, fan_in)
-            name = ".".join(name.split('.')[:-1])
+            name = ".".join(name.split(".")[:-1])
             s_all[name] += s
     for name, imp in s_all.items():
         if torch.isnan(imp.sum()):
@@ -57,20 +66,23 @@ def update_sensitivity_dict(model, s_dict, pruning_type):
         s_dict[name] = imp * 0.9 + s_all[name] * 0.1
     return s_dict
 
-def compute_sensitivity(layer, is_attn, prune_metric='lora', transpose=False, norm=True):
+
+def compute_sensitivity(
+    layer, is_attn, prune_metric="lora", transpose=False, norm=True
+):
     a = layer.lora_A.weight.data
     b = layer.lora_B.weight.data
-    if prune_metric == 'lora':
+    if prune_metric == "lora":
         grad_a = layer.lora_A.weight.grad
         grad_b = layer.lora_B.weight.grad
-        grad = (grad_b @ a + b @ grad_a - grad_b @ grad_a)
-    elif prune_metric == 'magnitude':
+        grad = grad_b @ a + b @ grad_a - grad_b @ grad_a
+    elif prune_metric == "magnitude":
         grad = 1
-    elif prune_metric == 'grad':
+    elif prune_metric == "grad":
         grad = layer.weight.grad
     else:
         raise NotImplementedError
-    if hasattr(layer, 'state'):
+    if hasattr(layer, "state"):
         weight = (layer.weight.data * layer.state.SCB.reshape(-1, 1)) / 127
     else:
         weight = layer.weight.data
@@ -85,6 +97,7 @@ def compute_sensitivity(layer, is_attn, prune_metric='lora', transpose=False, no
     if norm:
         s = s / (torch.linalg.norm(s) + 1e-8)
     return s
+
 
 def prune_fp16_module(module, mask, transpose):
     mask = mask.bool()
@@ -104,31 +117,70 @@ def prune_fp16_module(module, mask, transpose):
     module.merge_weights = True
     module.train(False)
 
+
 def prune_one_layer(layer):
+    print(f"\n=== Pruning Layer Statistics ===")
+
+    # Track initial sizes
+    initial_sizes = {
+        "q_proj": layer.self_attn.q_proj.weight.shape,
+        "k_proj": layer.self_attn.k_proj.weight.shape,
+        "v_proj": layer.self_attn.v_proj.weight.shape,
+        "o_proj": layer.self_attn.o_proj.weight.shape,
+        "gate_proj": layer.mlp.gate_proj.weight.shape,
+        "up_proj": layer.mlp.up_proj.weight.shape,
+        "down_proj": layer.mlp.down_proj.weight.shape,
+    }
+    print("Initial sizes:")
+    for name, size in initial_sizes.items():
+        print(f"{name}: {size}")
+
     ## self_attn
     prune_fp16_module(layer.self_attn.q_proj, layer.self_attn.q_proj.lora_mask, False)
     prune_fp16_module(layer.self_attn.k_proj, layer.self_attn.k_proj.lora_mask, False)
     prune_fp16_module(layer.self_attn.v_proj, layer.self_attn.v_proj.lora_mask, False)
     prune_fp16_module(layer.self_attn.o_proj, layer.self_attn.q_proj.lora_mask, True)
-    layer.self_attn.num_heads = int(layer.self_attn.q_proj.lora_mask.sum()) // 128
-    layer.self_attn.hidden_size = int(layer.self_attn.q_proj.lora_mask.sum())
 
     ## mlp
     prune_fp16_module(layer.mlp.gate_proj, layer.mlp.gate_proj.lora_mask, False)
     prune_fp16_module(layer.mlp.up_proj, layer.mlp.up_proj.lora_mask, False)
     prune_fp16_module(layer.mlp.down_proj, layer.mlp.gate_proj.lora_mask, True)
 
+    # Track final sizes
+    final_sizes = {
+        "q_proj": layer.self_attn.q_proj.weight.shape,
+        "k_proj": layer.self_attn.k_proj.weight.shape,
+        "v_proj": layer.self_attn.v_proj.weight.shape,
+        "o_proj": layer.self_attn.o_proj.weight.shape,
+        "gate_proj": layer.mlp.gate_proj.weight.shape,
+        "up_proj": layer.mlp.up_proj.weight.shape,
+        "down_proj": layer.mlp.down_proj.weight.shape,
+    }
+    print("\nFinal sizes:")
+    for name, size in final_sizes.items():
+        print(f"{name}: {size}")
+
+    # Calculate reduction percentages
+    print("\nReduction percentages:")
+    for name in initial_sizes.keys():
+        initial_params = np.prod(initial_sizes[name])
+        final_params = np.prod(final_sizes[name])
+        reduction = (initial_params - final_params) / initial_params * 100
+        print(f"{name}: {reduction:.2f}% reduction")
+
     ## reset mask
-    del(layer.self_attn.q_proj.lora_mask)
-    del(layer.self_attn.k_proj.lora_mask)
-    del(layer.self_attn.v_proj.lora_mask)
-    del(layer.mlp.gate_proj.lora_mask)
-    del(layer.mlp.up_proj.lora_mask)
+    del layer.self_attn.q_proj.lora_mask
+    del layer.self_attn.k_proj.lora_mask
+    del layer.self_attn.v_proj.lora_mask
+    del layer.mlp.gate_proj.lora_mask
+    del layer.mlp.up_proj.lora_mask
+
 
 def prune(model):
     for layer_id, layer in enumerate(model.model.model.layers):
         print("pruning layer {}".format(layer_id))
         prune_one_layer(layer)
+
 
 def local_prune(model, s_dict, ratio, target_ratio):
     original_param_num = 0
@@ -137,13 +189,13 @@ def local_prune(model, s_dict, ratio, target_ratio):
         if _is_target_larer(module):
             original_param_num += np.prod(module.weight.shape)
             pruned_param_num += np.prod(module.weight.shape) * ratio
-            is_attn = name.split('.')[-1] in pruning_groups['self_attn']
-            if name.split('.')[-1] in pruning_groups['block']:
+            is_attn = name.split(".")[-1] in pruning_groups["self_attn"]
+            if name.split(".")[-1] in pruning_groups["block"]:
                 continue
-            name = ".".join(name.split('.')[:-1])
-            if not hasattr(module, 'lora_mask'):
+            name = ".".join(name.split(".")[:-1])
+            if not hasattr(module, "lora_mask"):
                 continue
-            if (1-module.lora_mask.mean()).item() >= target_ratio:
+            if (1 - module.lora_mask.mean()).item() >= target_ratio:
                 continue
             total_num = module.lora_mask.numel()
             c_mask = module.lora_mask.data
@@ -159,14 +211,22 @@ def local_prune(model, s_dict, ratio, target_ratio):
             can_prune = torch.argsort(importance)[:need_prune_num]
             mask[can_prune] = 0
             if is_attn:
-                mask = (mask.new_ones(module.lora_mask.shape).reshape(-1, head_dim) * mask.unsqueeze(1)).reshape(-1)
+                mask = (
+                    mask.new_ones(module.lora_mask.shape).reshape(-1, head_dim)
+                    * mask.unsqueeze(1)
+                ).reshape(-1)
             module.lora_mask.data = mask
         else:
-            if hasattr(module, 'weight'):
+            if hasattr(module, "weight"):
                 original_param_num += np.prod(module.weight.shape)
-    print("pruned/original parameters number:{:3f}/{:3f}  ratio:{:3f}".format(pruned_param_num*1e-9,
-                                                                               original_param_num*1e-9,
-                                                                               pruned_param_num/original_param_num))
+    print(
+        "pruned/original parameters number:{:3f}/{:3f}  ratio:{:3f}".format(
+            pruned_param_num * 1e-9,
+            original_param_num * 1e-9,
+            pruned_param_num / original_param_num,
+        )
+    )
+
 
 def schedule_sparsity_ratio(
     step,
@@ -184,11 +244,13 @@ def schedule_sparsity_ratio(
         spars_warmup_steps = initial_warmup * total_step
         spars_schedu_steps = (final_warmup + initial_warmup) * total_step
         mul_coeff = 1 - (step - spars_warmup_steps) / (total_step - spars_schedu_steps)
-        sparsity = final_sparsity + (initial_sparsity - final_sparsity) * (mul_coeff ** 3)
+        sparsity = final_sparsity + (initial_sparsity - final_sparsity) * (mul_coeff**3)
     return sparsity
+
 
 def prune_from_checkpoint(model):
     prune(model)
+
 
 def print_trainable_parameters(model):
     total_params = 0
@@ -197,4 +259,10 @@ def print_trainable_parameters(model):
         if p.requires_grad:
             trainable_params += p.numel()
         total_params += p.numel()
-    print("total params:{}   trainable params:{}    ratio:{}".format(total_params * 1e-6, trainable_params * 1e-6, trainable_params / total_params))
+    print(
+        "total params:{}   trainable params:{}    ratio:{}".format(
+            total_params * 1e-6,
+            trainable_params * 1e-6,
+            trainable_params / total_params,
+        )
+    )

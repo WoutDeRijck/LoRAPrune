@@ -38,17 +38,12 @@ def train(
     warmup_iters: float = 0.1,
     cooldown_iters: float = 0.1,
     prune_freq: int = 10,
-    prune_metric: str = 'lora',  # options: lora|grad|magnitude
+    prune_metric: str = "lora",  # options: lora|grad|magnitude
     # lora hyperparams
     lora_r: int = 8,
     lora_alpha: int = 16,
     lora_dropout: float = 0.05,
-    lora_target_modules: List[str] = [
-        "o_proj",
-        "gate_proj",
-        "down_proj",
-        "up_proj"
-    ],
+    lora_target_modules: List[str] = ["o_proj", "gate_proj", "down_proj", "up_proj"],
     # llm hyperparams
     train_on_inputs: bool = False,  # if False, masks out inputs in loss
     group_by_length: bool = False,  # faster, but produces an odd training loss curve
@@ -84,9 +79,7 @@ def train(
         f"resume_from_checkpoint: {resume_from_checkpoint}\n"
         f"prune_metric: {resume_from_checkpoint}\n"
     )
-    assert (
-        base_model
-    ), "Please specify a --base_model, e.g. --base_model='decapoda-research/llama-7b-hf'"
+    assert base_model, "Please specify a --base_model, e.g. --base_model='decapoda-research/llama-7b-hf'"
     gradient_accumulation_steps = batch_size // micro_batch_size
 
     device_map = "auto"
@@ -117,9 +110,7 @@ def train(
 
     tokenizer = AutoTokenizer.from_pretrained(base_model)
 
-    tokenizer.pad_token_id = (
-        0  # unk. we want this to be different from the eos token
-    )
+    tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
     tokenizer.padding_side = "left"  # Allow batched inference
 
     def tokenize(prompt, add_eos_token=True):
@@ -171,9 +162,10 @@ def train(
         lora_dropout=lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
-        peft_type="LORA"
+        peft_type="LORA",
     )
     from loraprune.peft_model import get_peft_model
+
     # from peft import get_peft_model
     model = get_peft_model(model, config)
 
@@ -194,9 +186,7 @@ def train(
             checkpoint_name = os.path.join(
                 resume_from_checkpoint, "adapter_model.bin"
             )  # only LoRA model - LoRA config above has to fit
-            resume_from_checkpoint = (
-                False  # So the trainer won't try loading its state
-            )
+            resume_from_checkpoint = False  # So the trainer won't try loading its state
         # The two files above have a different name depending on how they were saved, but are actually the same.
         if os.path.exists(checkpoint_name):
             print(f"Restarting from {checkpoint_name}")
@@ -211,12 +201,8 @@ def train(
         train_val = data["train"].train_test_split(
             test_size=val_set_size, shuffle=True, seed=42
         )
-        train_data = (
-            train_val["train"].shuffle().map(generate_and_tokenize_prompt)
-        )
-        val_data = (
-            train_val["test"].shuffle().map(generate_and_tokenize_prompt)
-        )
+        train_data = train_val["train"].shuffle().map(generate_and_tokenize_prompt)
+        val_data = train_val["test"].shuffle().map(generate_and_tokenize_prompt)
     else:
         train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
         val_data = None
@@ -235,7 +221,7 @@ def train(
             fp16=True,
             logging_steps=10,
             optim="adamw_torch",
-            evaluation_strategy="steps" if val_set_size > 0 else "no",
+            eval_strategy="steps" if val_set_size > 0 else "no",
             save_strategy="steps",
             eval_steps=100 if val_set_size > 0 else None,
             save_steps=100,
@@ -250,34 +236,60 @@ def train(
         data_collator=transformers.DataCollatorForSeq2Seq(
             tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
         ),
-        # data_collator=data_collator,
         ratio=ratio,
         init_ratio=init_ratio,
         warmup_iters=warmup_iters,
         cooldown_iters=cooldown_iters,
         prune_freq=prune_freq,
-        prune_metric=prune_metric
+        prune_metric=prune_metric,
     )
 
     model.config.use_cache = False
 
     old_state_dict = model.state_dict
     model.state_dict = (
-        lambda self, *_, **__: get_peft_model_state_dict(
-            self, old_state_dict()
-        )
+        lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
     ).__get__(model, type(model))
 
     # if torch.__version__ >= "2" and sys.platform != "win32":
     #     model = torch.compile(model)
 
+    print("\n=== Initial Model Parameters ===")
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    print(f"Target modules for pruning: {lora_target_modules}")
+
+    print("\n=== Module Sizes Before Training ===")
+    for name, module in model.named_modules():
+        if any(target in name for target in lora_target_modules):
+            print(
+                f"{name}: {module.weight.shape if hasattr(module, 'weight') else 'No weight tensor'}"
+            )
+
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+
+    print("\n=== Final Model Statistics ===")
+    final_total_params = sum(p.numel() for p in model.parameters())
+    final_trainable_params = sum(
+        p.numel() for p in model.parameters() if p.requires_grad
+    )
+    print(f"Final total parameters: {final_total_params:,}")
+    print(f"Final trainable parameters: {final_trainable_params:,}")
+    print(f"Parameters removed: {total_params - final_total_params:,}")
+    print(f"Pruning ratio: {(total_params - final_total_params) / total_params:.2%}")
+
+    print("\n=== Final Module Sizes ===")
+    for name, module in model.named_modules():
+        if any(target in name for target in lora_target_modules):
+            print(
+                f"{name}: {module.weight.shape if hasattr(module, 'weight') else 'No weight tensor'}"
+            )
 
     model.save_pretrained(output_dir)
 
-    print(
-        "\n If there's a warning about missing keys above, please disregard :)"
-    )
+    print("\n If there's a warning about missing keys above, please disregard :)")
 
 
 def generate_prompt(data_point):
